@@ -115,7 +115,7 @@ mod test {
 
     #[test]
     fn test_sumcheck_protocol() {
-        let poly = MultilinearPoly::new(3, to_field(vec![0, 0, 0, 3, 0, 0, 2, 5]));
+        let poly = MultilinearPoly::new(to_field(vec![0, 0, 0, 3, 0, 0, 2, 5]));
         let proof = prove(&poly, Fr::from(20));
 
         dbg!(verify(&poly, &proof));

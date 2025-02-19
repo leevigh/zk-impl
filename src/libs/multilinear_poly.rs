@@ -7,7 +7,8 @@ pub(crate) struct MultilinearPoly<F: PrimeField> {
 }
 
 impl<F: PrimeField> MultilinearPoly<F> {
-    pub(crate) fn new(n_vars: usize, evaluations: Vec<F>) -> Self {
+    pub(crate) fn new(evaluations: Vec<F>) -> Self {
+        let n_vars: usize = evaluations.len().ilog2() as usize;
         if evaluations.len() != 1 << n_vars {
             panic!("what are you doing?");
         }
@@ -51,7 +52,7 @@ impl<F: PrimeField> MultilinearPoly<F> {
             result.push(a + *value * (b - a));
         }
 
-        Self::new(self.n_vars - 1, result)
+        Self::new(result)
     }
 }
 
@@ -129,7 +130,7 @@ pub(crate) mod tests {
     #[test]
     fn test_partial_evaluate() {
         // 2ab + 3bc
-        let poly = MultilinearPoly::new(3, to_field(vec![0_u64, 0, 0, 3, 0, 0, 2, 5]));
+        let poly = MultilinearPoly::new(to_field(vec![0_u64, 0, 0, 3, 0, 0, 2, 5]));
         assert_eq!(
             poly.partial_evaluate(2, &Fr::from(3)).evals,
             to_field(vec![0, 9, 0, 11])
