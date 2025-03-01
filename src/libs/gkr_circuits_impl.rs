@@ -4,7 +4,7 @@ use multilinear_poly::MultilinearPoly;
 
 use super::multilinear_poly;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Operation {
     Add,
     Mul,
@@ -20,7 +20,7 @@ impl Operation {
 }
 
 #[derive(Debug, Clone)]
-struct Gate<F: PrimeField> {
+pub struct Gate<F: PrimeField> {
     l_input: F,
     r_input: F,
     output: F,
@@ -28,7 +28,7 @@ struct Gate<F: PrimeField> {
 }
 
 impl<F: PrimeField> Gate<F> {
-    fn new(l_input: F, r_input: F, op: Operation) -> Self {
+    pub fn new(l_input: F, r_input: F, op: Operation) -> Self {
         let output = op.apply(l_input, r_input);
 
         Self {
@@ -41,20 +41,21 @@ impl<F: PrimeField> Gate<F> {
 }
 
 #[derive(Debug, Clone)]
-struct Layer<F: PrimeField> {
+pub struct Layer<F: PrimeField> {
     gates: Vec<Gate<F>>,
 }
 
 impl<F: PrimeField> Layer<F> {
-    fn new(gates: Vec<Gate<F>>) -> Self {
+    pub fn new(gates: Vec<Gate<F>>) -> Self {
         Self { gates }
     }
 
+    // adds the outputs of each gate in the layer and returns an array of the outputs
     fn get_layer_poly(&self) -> Vec<F> {
         self.gates.iter().map(|gate| gate.output).collect()
     }
 
-    fn get_add_mul_i(&self, op: Operation) -> MultilinearPoly<F> {
+    pub fn get_add_mul_i(&self, op: Operation) -> MultilinearPoly<F> {
         let n_bits = self.get_bits_for_gates();
         let layer_size = 1 << n_bits;
         let mut poly_eval = vec![F::zero(); layer_size];
@@ -92,12 +93,12 @@ impl<F: PrimeField> Layer<F> {
 }
 
 #[derive(Debug, Clone)]
-struct Circuit<F: PrimeField> {
-    layers: Vec<Layer<F>>,
+pub struct Circuit<F: PrimeField> {
+    pub layers: Vec<Layer<F>>,
 }
 
 impl<F: PrimeField> Circuit<F> {
-    fn new(structure: Vec<Vec<Operation>>) -> Self {
+    pub fn new(structure: Vec<Vec<Operation>>) -> Self {
         let layers = structure
             .into_iter()
             .map(|ops_layer| {
@@ -111,9 +112,9 @@ impl<F: PrimeField> Circuit<F> {
         Self { layers }
     }
 
-    fn evaluate(&mut self, inputs: Vec<F>) -> Vec<Vec<F>> {
+    pub fn evaluate(&mut self, inputs: &[F]) -> Vec<Vec<F>> {
         let mut result = Vec::new();
-        let mut current_inputs = inputs;
+        let mut current_inputs = inputs.to_vec();
 
         for layer in &mut self.layers {
             for (gate, input_pair) in layer.gates.iter_mut().zip(current_inputs.chunks_exact(2)) {
@@ -167,7 +168,7 @@ mod test {
 
         let mut circuit = Circuit::new(structure);
 
-        let evaluations = circuit.evaluate(inputs);
+        let evaluations = circuit.evaluate(&inputs);
 
         assert_eq!(evaluations, expected_evaluations);
     }

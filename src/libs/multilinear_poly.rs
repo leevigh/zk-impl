@@ -1,6 +1,7 @@
 use ark_ff::PrimeField;
+use std::ops::{Add, Mul, Sub};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MultilinearPoly<F: PrimeField> {
     pub(crate) evals: Vec<F>,
     pub(crate) n_vars: usize,
@@ -19,18 +20,31 @@ impl<F: PrimeField> MultilinearPoly<F> {
         }
     }
 
-    pub(crate) fn evaluate(&self, assignments: &[F]) -> F {
-        if assignments.len() != self.n_vars {
-            panic!("what are you doing again?");
+    // pub(crate) fn evaluate(&self, assignments: &[F]) -> F {
+    //     if assignments.len() != self.n_vars {
+    //         panic!("what are you doing again?");
+    //     }
+
+    //     let mut poly = self.clone();
+
+    //     for val in assignments {
+    //         poly = poly.partial_evaluate(0, val);
+    //     }
+
+    //     poly.evals[0]
+    // }
+    pub fn evaluate(&self, values: Vec<F>) -> F {
+        if values.len() != self.n_vars {
+            panic!("Invalid number of values");
         }
 
-        let mut poly = self.clone();
+        let mut result = self.clone();
 
-        for val in assignments {
-            poly = poly.partial_evaluate(0, val);
+        for value in values.iter() {
+            result = result.partial_evaluate(0, value);
         }
 
-        poly.evals[0]
+        result.evals[0]
     }
 
     pub(crate) fn partial_evaluate(&self, index: usize, value: &F) -> Self {
@@ -53,6 +67,172 @@ impl<F: PrimeField> MultilinearPoly<F> {
         }
 
         Self::new(result)
+    }
+
+    pub fn multi_partial_evaluate(&self, values: &[F]) -> Self {
+        if values.len() > self.n_vars {
+            panic!("Invalid number of values");
+        }
+
+        let mut poly = self.clone();
+
+        for (i, value) in values.iter().enumerate() {
+            poly = poly.partial_evaluate(0, value);
+        }
+
+        poly
+    }
+
+    pub fn scale(&self, value: F) -> Self {
+        let result = self.evals.iter().map(|eval| *eval * value).collect();
+
+        Self::new(result)
+    }
+}
+
+impl<F: PrimeField> Add for MultilinearPoly<F> {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        let result = self
+            .evals
+            .iter()
+            .zip(other.evals.iter())
+            .map(|(a, b)| *a + *b)
+            .collect();
+
+        MultilinearPoly::new(result)
+    }
+}
+
+impl<F: PrimeField> Mul for MultilinearPoly<F> {
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self {
+        let result = self
+            .evals
+            .iter()
+            .zip(other.evals.iter())
+            .map(|(a, b)| *a * *b)
+            .collect();
+
+        MultilinearPoly::new(result)
+    }
+}
+
+impl<F: PrimeField> Sub for MultilinearPoly<F> {
+    type Output = Self;
+
+    fn sub(self, other: Self) -> Self {
+        let result = self
+            .evals
+            .iter()
+            .zip(other.evals.iter())
+            .map(|(a, b)| *a - *b)
+            .collect();
+
+        MultilinearPoly::new(result)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProductPoly<F: PrimeField> {
+    pub evaluation: Vec<MultilinearPoly<F>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SumPoly<F: PrimeField> {
+    pub polys: Vec<ProductPoly<F>>,
+}
+
+impl<F: PrimeField> ProductPoly<F> {
+    pub fn new(evaluations: Vec<Vec<F>>) -> Self {
+        let length_1 = evaluations[0].len();
+
+        if evaluations.iter().any(|eval| eval.len() != length_1) {
+            panic!("all evaluations must have same length");
+        }
+
+        let polys = evaluations
+            .iter()
+            .map(|evaluation| MultilinearPoly::new(evaluation.to_vec()))
+            .collect();
+
+        Self { evaluation: polys }
+    }
+
+    fn evaluate(&self, values: Vec<F>) -> F {
+        self.evaluation
+            .iter()
+            .map(|poly| poly.evaluate(values.clone()))
+            .product()
+    }
+
+    fn partial_evaluate(&self, value: &F) -> Self {
+        let partial_polys = self
+            .evaluation
+            .iter()
+            .map(|poly| {
+                let partial_res = poly.partial_evaluate(0, value);
+
+                partial_res.evals
+            })
+            .collect();
+
+        Self::new(partial_polys)
+    }
+
+    fn reduce(&self) -> Vec<F> {
+        (self.evaluation[0].clone() * self.evaluation[1].clone()).evals
+    }
+
+    fn get_degree(&self) -> usize {
+        self.evaluation.len()
+    }
+}
+
+impl<F: PrimeField> SumPoly<F> {
+    pub fn new(polys: Vec<ProductPoly<F>>) -> Self {
+        let degree_1 = polys[0].get_degree();
+        if polys.iter().any(|poly| poly.get_degree() != degree_1) {
+            panic!("all product polys must have same degree");
+        }
+
+        Self { polys }
+    }
+
+    pub fn evaluate(&self, values: Vec<F>) -> F {
+        self.polys
+            .iter()
+            .map(|poly| poly.evaluate(values.clone()))
+            .sum()
+    }
+
+    pub fn partial_evaluate(&self, value: &F) -> Self {
+        let partial_polys = self
+            .polys
+            .iter()
+            .map(|product_poly| product_poly.partial_evaluate(value))
+            .collect();
+
+        Self::new(partial_polys)
+    }
+
+    pub fn reduce(&self) -> Vec<F> {
+        let poly_a = &self.polys[0].reduce();
+        let poly_b = &self.polys[1].reduce();
+
+        let result = poly_a
+            .iter()
+            .zip(poly_b.iter())
+            .map(|(a, b)| *a + *b)
+            .collect();
+
+        result
+    }
+
+    pub fn get_degree(&self) -> usize {
+        self.polys[0].get_degree()
     }
 }
 
@@ -107,7 +287,8 @@ fn insert_bit(value: usize, index: usize) -> usize {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::{insert_bit, pairs, MultilinearPoly};
-    use ark_bn254::Fr;
+    use super::{ProductPoly, SumPoly};
+    use ark_bn254::{Fq, Fr};
 
     pub(crate) fn to_field(input: Vec<u64>) -> Vec<Fr> {
         input.into_iter().map(|v| Fr::from(v)).collect()
@@ -140,224 +321,150 @@ pub(crate) mod tests {
             to_field(vec![0, 9, 6, 15])
         );
     }
+
+    #[test]
+    fn product_poly_evaluates_multiple_polys() {
+        let evaluations = vec![
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(3)],
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(2)],
+        ];
+
+        let product_polys = ProductPoly::new(evaluations);
+
+        let values = vec![Fq::from(2), Fq::from(3)];
+
+        let expected_evaluation = Fq::from(216);
+
+        let result = product_polys.evaluate(values);
+
+        assert_eq!(expected_evaluation, result);
+    }
+
+    #[test]
+    fn product_poly_partially_evaluates_multiple_polys() {
+        let evaluations = vec![
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(3)],
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(2)],
+        ];
+
+        let product_polys = ProductPoly::new(evaluations);
+
+        let value = Fq::from(2);
+
+        let expected_evaluation = vec![
+            vec![Fq::from(0), Fq::from(6)],
+            vec![Fq::from(0), Fq::from(4)],
+        ];
+
+        let result = product_polys.partial_evaluate(&value);
+
+        let result_polys: Vec<_> = result
+            .evaluation
+            .iter()
+            .map(|poly| poly.evals.clone())
+            .collect();
+
+        assert_eq!(result_polys, expected_evaluation);
+    }
+
+    #[test]
+    #[should_panic]
+    fn product_poly_doesnt_allow_different_evaluation_size() {
+        let evaluations = vec![
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(3)],
+            vec![
+                Fq::from(0),
+                Fq::from(0),
+                Fq::from(0),
+                Fq::from(4),
+                Fq::from(0),
+                Fq::from(0),
+                Fq::from(0),
+                Fq::from(4),
+            ],
+        ];
+
+        let _ = ProductPoly::new(evaluations);
+    }
+
+    #[test]
+    fn product_poly_gets_correct_degree() {}
+
+    #[test]
+    fn sum_poly_gets_correct_degree() {}
+
+    #[test]
+    fn sum_poly_evaluates_properly() {
+        let evaluations_1 = vec![
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(3)],
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(2)],
+        ];
+
+        let evaluations_2 = vec![
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(4)],
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(5)],
+        ];
+
+        let product_poly_1 = ProductPoly::new(evaluations_1);
+        let product_poly_2 = ProductPoly::new(evaluations_2);
+
+        let sum_poly = SumPoly::new(vec![product_poly_1, product_poly_2]);
+
+        let values = vec![Fq::from(2), Fq::from(3)];
+
+        let expected_result = Fq::from(936);
+
+        let result = sum_poly.evaluate(values);
+
+        assert_eq!(expected_result, result);
+    }
+
+    #[test]
+    fn sum_poly_partially_evaluates_properly() {
+        let evaluations_1 = vec![
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(3)],
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(2)],
+        ];
+
+        let evaluations_2 = vec![
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(4)],
+            vec![Fq::from(0), Fq::from(0), Fq::from(0), Fq::from(5)],
+        ];
+
+        let product_poly_1 = ProductPoly::new(evaluations_1);
+        let product_poly_2 = ProductPoly::new(evaluations_2);
+
+        let value = Fq::from(2);
+
+        let expected_evaluation_1 = vec![
+            vec![Fq::from(0), Fq::from(6)],
+            vec![Fq::from(0), Fq::from(4)],
+        ];
+
+        let expected_evaluation_2 = vec![
+            vec![Fq::from(0), Fq::from(8)],
+            vec![Fq::from(0), Fq::from(10)],
+        ];
+
+        let sum_poly = SumPoly::new(vec![product_poly_1, product_poly_2]);
+
+        let result = sum_poly.partial_evaluate(&value);
+
+        let result_polys: Vec<_> = result
+            .polys
+            .iter()
+            .map(|product_poly| {
+                product_poly
+                    .evaluation
+                    .iter()
+                    .map(|poly| poly.evals.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert_eq!(
+            vec![expected_evaluation_1, expected_evaluation_2],
+            result_polys
+        );
+    }
 }
-
-// Define a type alias for Hypercube - it's a vector of tuples containing a vector of bytes and a field element
-// This represents points in a binary hypercube with their corresponding field values
-// type Hypercube<F> = Vec<(Vec<u8>, F)>;
-
-// Define a struct to represent a Binary Hypercube (BHC)
-// It contains the points and values of the hypercube
-// struct BHC<F> {
-//     bits: Hypercube<F>,
-// }
-
-// Define the main MultilinearPoly struct that can be cloned
-// It stores the evaluation points of a multilinear polynomial
-// #[derive(Clone)]
-// pub struct MultilinearPoly<F: PrimeField> {
-//     pub evaluation: Vec<F>,
-// }
-
-// Implementation block for BHC
-// impl<F: PrimeField> BHC<F> {
-//     // Constructor for BHC
-//     fn new(hypercube: Hypercube<F>) -> Self {
-//         BHC { bits: hypercube }
-//     }
-
-//     // Generate a binary hypercube from polynomial evaluation points
-//     fn generate_bhc(poly_evaluation: Vec<F>) -> Self {
-//         // Calculate number of bits needed based on input length
-//         let bits = poly_evaluation.len().ilog2() as usize;
-//         let size = 1 << bits; // Calculate 2^bits
-
-//         // Create the hypercube by mapping each index to its binary representation
-//         let hypercube: Hypercube<F> = (0..size)
-//             .map(|i| {
-//                 // Convert index to binary representation
-//                 let point = (0..bits).rev().map(|j| ((i >> j) & 1) as u8).collect();
-//                 (point, poly_evaluation[i])
-//             })
-//             .collect();
-//         Self::new(hypercube)
-//     }
-
-//     // Pair points in the hypercube based on a specific bit position
-//     fn pair_points(&self, bit: u8) -> Vec<(F, F)> {
-//         let mut pairs = Vec::new();
-//         let pair_index = 1 << bit; // Calculate 2^bit
-
-//         // Create pairs of points that differ only in the specified bit
-//         for i in 0..pair_index {
-//             if i + pair_index < self.bits.len() {
-//                 let (_, a) = &self.bits[i];
-//                 let (_, b) = &self.bits[i + pair_index];
-//                 pairs.push((a.clone(), b.clone()));
-//             }
-//         }
-//         pairs
-//     }
-// }
-
-// Implementation block for MultilinearPoly
-// impl<F: PrimeField> MultilinearPoly<F> {
-//     // Constructor for MultilinearPoly
-//     pub fn new(evaluations: Vec<F>) -> Self {
-//         MultilinearPoly {
-//             evaluation: evaluations,
-//         }
-//     }
-
-//     // Linear interpolation between two points
-//     fn interpolate(points: (F, F), value: F) -> F {
-//         let (y_0, y_1) = points;
-//         // Compute y_0 + t(y_1 - y_0) where t is the value
-//         y_0 + (value * (y_1 - y_0))
-//     }
-
-//     // Partially evaluate the polynomial at a specific bit position
-//     pub fn partial_evaluate(&self, value: F, bit: u8) -> Self {
-//         // Generate binary hypercube from current evaluation
-//         let bhc = BHC::generate_bhc(self.evaluation.clone());
-
-//         // Interpolate paired points using the given value
-//         let paired_evaluations = bhc
-//             .pair_points(bit)
-//             .iter()
-//             .map(|point| Self::interpolate(*point, value))
-//             .collect();
-//         Self::new(paired_evaluations)
-//     }
-
-//     // Evaluate the polynomial at multiple points
-//     pub fn evaluate(&self, values: Vec<F>) -> F {
-//         let mut result = self.clone();
-//         let mut bits = result.evaluation.len().ilog2() - 1;
-
-//         // Iteratively evaluate the polynomial one bit at a time
-//         for value in values.iter() {
-//             result = result.partial_evaluate(*value, bits.try_into().unwrap());
-//             if bits == 0 {
-//                 break;
-//             } else {
-//                 bits -= 1;
-//             }
-//         }
-//         result.evaluation[0]
-//     }
-// }
-
-// Implement addition for MultilinearPoly
-// impl<F: PrimeField> Add for MultilinearPoly<F> {
-//     type Output = Self;
-
-//     // Add two multilinear polynomials component-wise
-//     fn add(self, other: Self) -> Self {
-//         // Create vector of appropriate size filled with zeros
-//         let mut result = vec![F::zero(); self.evaluation.len().max(other.evaluation.len())];
-
-//         // Add components from first polynomial
-//         for (i, &value) in self.evaluation.iter().enumerate() {
-//             result[i] += value;
-//         }
-
-//         // Add components from second polynomial
-//         for (i, &value) in other.evaluation.iter().enumerate() {
-//             result[i] += value;
-//         }
-
-//         MultilinearPoly::new(result)
-//     }
-// }
-// #[cfg(test)]
-// mod test {
-//     use super::*;
-//     use ark_bn254::Fq;
-
-//     #[test]
-//     fn it_pair_points_correctly() {
-//         let evaluations = vec![Fq::from(0), Fq::from(1), Fq::from(2), Fq::from(3)];
-//         let bhc = BHC::generate_bhc(evaluations);
-
-//         let pairs = bhc.pair_points(1);
-//         assert_eq!(
-//             pairs,
-//             vec![(Fq::from(0), Fq::from(2)), (Fq::from(1), Fq::from(3))]
-//         );
-//     }
-
-//     #[test]
-//     fn it_partially_evaluates_any_multilinear() {
-//         let evaluations = vec![Fq::from(0), Fq::from(0), Fq::from(3), Fq::from(10)];
-//         let polynomial = MultilinearPoly::new(evaluations);
-
-//         let value_a = Fq::from(5);
-//         let bit_a = 1;
-
-//         let result = polynomial.partial_evaluate(value_a, bit_a);
-
-//         assert_eq!(result.evaluation, vec![Fq::from(15), Fq::from(50)]);
-//     }
-
-//     #[test]
-//     fn it_fully_evaluates_any_multilinear() {
-//         let evaluations = vec![Fq::from(0), Fq::from(0), Fq::from(3), Fq::from(10)];
-//         let polynomial = MultilinearPoly::new(evaluations);
-
-//         let values = vec![Fq::from(5), Fq::from(1)];
-
-//         let result = polynomial.evaluate(values);
-
-//         assert_eq!(result, Fq::from(50));
-//     }
-// }
-
-// use ark_ff::PrimeField;
-
-// struct MultilinearPoly {
-//     coefficients: Vec<i32>,
-//     num_of_variables: usize,
-// }
-
-// impl MultilinearPoly {
-//     fn getPair(hypercube: &Vec<Vec<i32>>, eval: i32) -> Vec<(usize, usize)> {
-//         let mut pair: Vec<(usize, usize)> = Vec::new();
-//         let mut on_evaluator_bit = Vec::new();
-//         let mut off_evaluator_bit = Vec::new();
-
-//         for (index, point) in hypercube.iter().enumerate() {
-//             if point[0] == 0 {
-//                 off_evaluator_bit.push(index);
-//             } else {
-//                 on_evaluator_bit.push(index);
-//             }
-//         }
-
-//         for (&on_idx, &off_idx) in off_evaluator_bit.iter().zip(on_evaluator_bit.iter()) {
-//             pair.push((on_idx, off_idx));
-//         }
-
-//         pair
-//     }
-
-//     fn partial_eval(pairs: Vec<(usize, usize)>, eval: f64) -> Vec<usize> {
-//         let mut result = Vec::new();
-
-//         // y_1 + r(y_2 - y_1); formula to interpolate & evaluate one take
-//         // y_1 is tup.0 and y_2 is tup.1
-//         for pair in pairs {
-//             let y_1 = pair.0 as f64;
-//             let y_2 = pair.1 as f64;
-//             // let computation = y_1 + eval * (y_2 - y_1);
-//             // let computation = pair.0 + (eval*(pair.1 - pair.0));
-//             // let computation = pair.0 as i32 + (mult as i32);
-//             // result.push(computation);
-//             // println!("{:?}", pair)
-//             println!("{:?}", y_1 + eval * (y_2 - y_1));
-//             println!("{} {}", pair.0, pair.1);
-//         }
-
-//         result
-//     }
-// }

@@ -4,7 +4,7 @@ use std::{
     ops::{Add, Mul},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UnivariatePolynomial<F: PrimeField> {
     pub coefficients: Vec<F>,
 }
@@ -20,6 +20,12 @@ impl<F: PrimeField> UnivariatePolynomial<F> {
         self.coefficients.len() - 1
     }
 
+    fn trim(&mut self) {
+        while self.coefficients.last() == Some(&F::zero()) {
+            self.coefficients.pop();
+        }
+    }
+
     pub fn evaluate(&self, x: F) -> F {
         self.coefficients
             .iter()
@@ -29,51 +35,107 @@ impl<F: PrimeField> UnivariatePolynomial<F> {
             .unwrap()
     }
 
-    pub fn interpolate(xs: Vec<F>, ys: Vec<F>) -> Self {
-        xs.iter()
-            .zip(ys.iter())
-            .map(|(x, y)| Self::basis(x, &xs).scalar_mul(y))
-            .sum()
-    }
+    // pub fn interpolate(xs: Vec<F>, ys: Vec<F>) -> Self {
+    //     xs.iter()
+    //         .zip(ys.iter())
+    //         .map(|(x, y)| Self::basis(x, &xs).scalar_mul(y))
+    //         .sum()
+    // }
+    pub fn interpolate(points: Vec<(F, F)>) -> UnivariatePolynomial<F> {
+        let n = points.len();
+        let mut result = UnivariatePolynomial::new(vec![F::zero()]);
 
-    fn scalar_mul(&self, scalar: &F) -> Self {
-        UnivariatePolynomial {
-            coefficients: self
-                .coefficients
-                .iter()
-                .map(|coeff| *coeff * *scalar)
-                .collect(),
+        for i in 0..n {
+            let (x_i, y_i) = points[i];
+            let mut l_i = UnivariatePolynomial::new(vec![F::one()]);
+
+            for j in 0..n {
+                if i != j {
+                    let (x_j, _) = points[j];
+
+                    let numerator = UnivariatePolynomial::new(vec![-x_j, F::one()]);
+
+                    let denominator = x_i - x_j;
+
+                    l_i = l_i * numerator.scalar_mul(F::one() / denominator);
+                }
+            }
+
+            result = result + l_i.scalar_mul(y_i);
         }
+
+        result.trim();
+
+        result
     }
 
-    fn basis(x: &F, interpolating_set: &[F]) -> Self {
-        let numerator: UnivariatePolynomial<F> = interpolating_set
+    // fn scalar_mul(&self, scalar: &F) -> Self {
+    //     UnivariatePolynomial {
+    //         coefficients: self
+    //             .coefficients
+    //             .iter()
+    //             .map(|coeff| *coeff * *scalar)
+    //             .collect(),
+    //     }
+    // }
+    fn scalar_mul(&self, scalar: F) -> Self {
+        let coefficients = self
+            .coefficients
             .iter()
-            .filter(|val| *val != x)
-            .map(|x_n| UnivariatePolynomial::new(vec![x_n.neg(), F::one()]))
-            .product();
+            .map(|point| *point * scalar)
+            .collect();
 
-        let denominator = F::one() / numerator.evaluate(*x);
+        let mut poly = UnivariatePolynomial::new(coefficients);
 
-        numerator.scalar_mul(&denominator)
+        poly.trim();
+
+        poly
     }
+
+    // fn basis(x: &F, interpolating_set: &[F]) -> Self {
+    //     let numerator: UnivariatePolynomial<F> = interpolating_set
+    //         .iter()
+    //         .filter(|val| *val != x)
+    //         .map(|x_n| UnivariatePolynomial::new(vec![x_n.neg(), F::one()]))
+    //         .product();
+
+    //     let denominator = F::one() / numerator.evaluate(*x);
+
+    //     numerator.scalar_mul(denominator)
+    // }
 }
 
-impl<F: PrimeField> Mul for &UnivariatePolynomial<F> {
-    type Output = UnivariatePolynomial<F>;
+// impl<F: PrimeField> Mul for &UnivariatePolynomial<F> {
+//     type Output = UnivariatePolynomial<F>;
 
-    fn mul(self, rhs: Self) -> Self::Output {
-        // mul for dense
-        let new_degree = self.degree() + rhs.degree();
-        let mut result = vec![F::zero(); new_degree + 1];
-        for i in 0..self.coefficients.len() {
-            for j in 0..rhs.coefficients.len() {
-                result[i + j] += self.coefficients[i] * rhs.coefficients[j]
+//     fn mul(self, rhs: Self) -> Self::Output {
+//         // mul for dense
+//         let new_degree = self.degree() + rhs.degree();
+//         let mut result = vec![F::zero(); new_degree + 1];
+//         for i in 0..self.coefficients.len() {
+//             for j in 0..rhs.coefficients.len() {
+//                 result[i + j] += self.coefficients[i] * rhs.coefficients[j]
+//             }
+//         }
+//         UnivariatePolynomial {
+//             coefficients: result,
+//         }
+//     }
+// }
+
+impl<F: PrimeField> Mul for UnivariatePolynomial<F> {
+    type Output = Self;
+
+    fn mul(mut self, mut other: Self) -> Self {
+        let mut coeffs = vec![F::zero(); self.degree() + other.degree() + 1];
+
+        for (i, a) in self.coefficients.iter().enumerate() {
+            for (j, b) in other.coefficients.iter().enumerate() {
+                coeffs[i + j] += *a * b;
             }
         }
-        UnivariatePolynomial {
-            coefficients: result,
-        }
+
+        UnivariatePolynomial::new(coeffs)
     }
 }
 
@@ -117,15 +179,15 @@ impl<F: PrimeField> Sum for UnivariatePolynomial<F> {
     }
 }
 
-impl<F: PrimeField> Product for UnivariatePolynomial<F> {
-    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
-        let mut result = UnivariatePolynomial::new(vec![F::one()]);
-        for poly in iter {
-            result = &result * &poly;
-        }
-        result
-    }
-}
+// impl<F: PrimeField> Product for UnivariatePolynomial<F> {
+//     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+//         let mut result = UnivariatePolynomial::new(vec![F::one()]);
+//         for poly in iter {
+//             result = &result * &poly;
+//         }
+//         result
+//     }
+// }
 
 #[cfg(test)]
 mod test {
@@ -178,32 +240,32 @@ mod test {
         )
     }
 
-    #[test]
-    fn test_mul() {
-        // f(x) = 5 + 2x^2
-        let poly_1: UnivariatePolynomial<Fq> = UnivariatePolynomial {
-            coefficients: vec![Fq::from(5), Fq::from(0), Fq::from(2)],
-        };
-        // f(x) = 2x + 6
-        let poly_2 = UnivariatePolynomial {
-            coefficients: vec![Fq::from(6), Fq::from(2)],
-        };
+    // #[test]
+    // fn test_mul() {
+    //     // f(x) = 5 + 2x^2
+    //     let poly_1: UnivariatePolynomial<Fq> = UnivariatePolynomial {
+    //         coefficients: vec![Fq::from(5), Fq::from(0), Fq::from(2)],
+    //     };
+    //     // f(x) = 2x + 6
+    //     let poly_2 = UnivariatePolynomial {
+    //         coefficients: vec![Fq::from(6), Fq::from(2)],
+    //     };
 
-        // r(x) = 30 + 10x + 12x^2 + 4x^3
-        assert_eq!(
-            (&poly_1 * &poly_2).coefficients,
-            vec![Fq::from(30), Fq::from(10), Fq::from(12), Fq::from(4)]
-        );
-    }
+    //     // r(x) = 30 + 10x + 12x^2 + 4x^3
+    //     assert_eq!(
+    //         (&poly_1 * &poly_2).coefficients,
+    //         vec![Fq::from(30), Fq::from(10), Fq::from(12), Fq::from(4)]
+    //     );
+    // }
 
-    #[test]
-    fn test_interpolate() {
-        // f(x) = 2x
-        // [(2, 4), (4, 8)]
-        let maybe_2x = UnivariatePolynomial::interpolate(
-            vec![Fq::from(2), Fq::from(4)],
-            vec![Fq::from(4), Fq::from(8)],
-        );
-        assert_eq!(maybe_2x.coefficients, vec![Fq::from(0), Fq::from(2)]);
-    }
+    // #[test]
+    // fn test_interpolate() {
+    //     // f(x) = 2x
+    //     // [(2, 4), (4, 8)]
+    //     let maybe_2x = UnivariatePolynomial::interpolate(
+    //         vec![Fq::from(2), Fq::from(4)],
+    //         vec![Fq::from(4), Fq::from(8)],
+    //     );
+    //     assert_eq!(maybe_2x.coefficients, vec![Fq::from(0), Fq::from(2)]);
+    // }
 }

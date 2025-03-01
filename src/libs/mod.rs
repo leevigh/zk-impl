@@ -1,5 +1,6 @@
 pub mod fiat_shamir;
 pub mod gkr_circuits_impl;
+pub mod gkr_protocol;
 pub mod multilinear_poly;
 pub mod polynomial;
 pub mod shamir_secret_sharing;

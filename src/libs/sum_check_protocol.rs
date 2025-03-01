@@ -1,5 +1,8 @@
-use crate::libs::transcript::Transcript;
-use crate::libs::{multilinear_poly::MultilinearPoly, transcript};
+use super::multilinear_poly::{MultilinearPoly, SumPoly};
+// use crate::libs::transcript::Transcript;
+use super::fiat_shamir::Transcript;
+// use crate::libs::{multilinear_poly::MultilinearPoly, transcript};
+use super::polynomial::UnivariatePolynomial;
 use ark_bn254::Fq;
 use ark_ff::{BigInteger, PrimeField};
 
@@ -9,7 +12,19 @@ struct Proof<F: PrimeField> {
     round_polys: Vec<[F; 2]>,
 }
 
-fn fq_vec_to_bytes(values: &[Fq]) -> Vec<u8> {
+pub struct GkrProof<F: PrimeField> {
+    pub proof_polynomials: Vec<Vec<F>>,
+    pub claimed_sum: F,
+    pub random_challenges: Vec<F>,
+}
+
+pub struct GkrVerify<F: PrimeField> {
+    pub verified: bool,
+    pub final_claimed_sum: F,
+    pub random_challenges: Vec<F>,
+}
+
+fn fq_vec_to_bytes<F: PrimeField>(values: &[F]) -> Vec<u8> {
     values
         .iter()
         .flat_map(|x| x.into_bigint().to_bytes_le())
@@ -51,7 +66,7 @@ fn prove<F: PrimeField>(poly: &MultilinearPoly<F>, claimed_sum: F) -> Proof<F> {
 
         round_polys.push(round_poly);
 
-        let challenge = transcript.sample_field_element();
+        let challenge = transcript.get_random_challenge();
 
         poly = poly.partial_evaluate(0, &challenge);
     }
@@ -94,16 +109,115 @@ fn verify<F: PrimeField>(poly: &MultilinearPoly<F>, proof: &Proof<F>) -> bool {
                 .as_slice(),
         );
 
-        let challenge = transcript.sample_field_element();
+        let challenge = transcript.get_random_challenge();
         claimed_sum = round_poly[0] + challenge * (round_poly[1] - round_poly[0]);
         challenges.push(challenge);
     }
 
-    if claimed_sum != poly.evaluate(&challenges) {
+    if claimed_sum != poly.evaluate(challenges) {
         return false;
     }
 
     true
+}
+
+pub fn gkr_prove<F: PrimeField>(
+    claimed_sum: F,
+    composed_polynomial: &SumPoly<F>,
+    transcript: &mut Transcript<F>,
+) -> GkrProof<F> {
+    let num_rounds = composed_polynomial.polys[0].evaluation[0].n_vars;
+    let mut proof_polynomials = Vec::with_capacity(num_rounds);
+    let mut random_challenges = Vec::with_capacity(num_rounds);
+    let mut current_poly = composed_polynomial.clone();
+
+    for _ in 0..num_rounds {
+        let proof_poly = get_round_partial_polynomial_proof_gkr(&current_poly); //this is f(b) then f(c)
+
+        transcript.append(&fq_vec_to_bytes(&proof_poly));
+
+        proof_polynomials.push(proof_poly);
+
+        let random_challenge = transcript.get_random_challenge(); //this is b and c aka r1 r2
+
+        random_challenges.push(random_challenge);
+
+        current_poly = current_poly.partial_evaluate(&random_challenge);
+    }
+
+    GkrProof {
+        proof_polynomials,
+        claimed_sum,
+        random_challenges,
+    }
+}
+
+pub fn gkr_verify<F: PrimeField>(
+    round_polys: Vec<Vec<F>>,
+    mut claimed_sum: F,
+    transcript: &mut Transcript<F>,
+) -> GkrVerify<F> {
+    let mut random_challenges = Vec::new();
+
+    for round_poly in round_polys {
+        let f_b_0 = round_poly[0];
+        let f_b_1 = round_poly[1];
+
+        if f_b_0 + f_b_1 != claimed_sum {
+            return GkrVerify {
+                verified: false,
+                final_claimed_sum: F::zero(),
+                random_challenges: vec![F::zero()],
+            };
+        }
+
+        transcript.append(&fq_vec_to_bytes(&round_poly));
+
+        let r_c = transcript.get_random_challenge();
+
+        random_challenges.push(r_c);
+
+        let round_uni_points = round_poly
+            .iter()
+            .enumerate()
+            .map(|(i, y)| {
+                let x = F::from(i as u64);
+
+                (x, *y)
+            })
+            .collect();
+
+        let round_uni_poly = UnivariatePolynomial::interpolate(round_uni_points);
+
+        claimed_sum = round_uni_poly.evaluate(r_c); //next expected sum
+    }
+
+    GkrVerify {
+        verified: true,
+        final_claimed_sum: claimed_sum,
+        random_challenges,
+    }
+}
+
+fn get_round_partial_polynomial_proof_gkr<F: PrimeField>(composed_poly: &SumPoly<F>) -> Vec<F> {
+    let degree = composed_poly.get_degree();
+
+    (0..=degree)
+        .map(|i| {
+            let partial_poly = composed_poly.partial_evaluate(&F::from(i as u64));
+
+            partial_poly.reduce().iter().sum()
+        })
+        .collect()
+}
+
+fn get_round_partial_polynomial_proof<F: PrimeField>(polynomial: &[F]) -> Vec<F> {
+    let mid_point = polynomial.len() / 2;
+    let (zeros, ones) = polynomial.split_at(mid_point);
+
+    let poly_proof = vec![zeros.iter().sum(), ones.iter().sum()];
+
+    poly_proof
 }
 
 #[cfg(test)]
